@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../properties/repository/properties_repository.dart';
@@ -1886,11 +1887,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                     if (clientName.isNotEmpty && mobile.isNotEmpty) {
                       try {
-                        await DioClient.dio.post('/followups', data: {
+                        final fId = FirebaseFirestore.instance.collection('followups').doc().id;
+                        final currentUser = RoleGuard.currentUser;
+                        await FirebaseFirestore.instance.collection('followups').doc(fId).set({
+                          'id': fId,
                           'client_name': clientName,
                           'mobile': mobile,
                           'notes': notes,
                           'followup_date': selectedDate.toUtc().toIso8601String(),
+                          'status': 'Pending',
+                          'created_at': DateTime.now().toIso8601String(),
+                          'updated_at': DateTime.now().toIso8601String(),
+                          'deleted_at': null,
+                          'created_by': currentUser?.id ?? 'System',
+                          'organization_id': currentUser?.organizationId ?? '',
+                          'requirement_id': '',
                         });
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(

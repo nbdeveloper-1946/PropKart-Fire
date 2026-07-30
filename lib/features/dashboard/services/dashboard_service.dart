@@ -68,9 +68,11 @@ class DashboardService {
         followupsList.add({
           'id': doc.id,
           'requirement_id': data['requirement_id'] ?? '',
-          'requirement_customer_name': data['requirement_customer_name'] ?? 'Client',
+          'requirement_customer_name': data['requirement_customer_name'] ?? data['client_name'] ?? 'Client',
+          'client_name': data['client_name'] ?? '',
+          'mobile': data['mobile'] ?? '',
           'followup_date': data['followup_date'] ?? DateTime.now().toIso8601String(),
-          'remarks': data['remarks'] ?? '',
+          'notes': data['notes'] ?? data['remarks'] ?? '',
           'status': data['status'] ?? 'Pending',
         });
       }

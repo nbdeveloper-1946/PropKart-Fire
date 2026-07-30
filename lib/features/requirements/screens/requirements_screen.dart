@@ -2638,10 +2638,19 @@ class _RequirementStepperDialogState extends State<RequirementStepperDialog> {
       );
 
       if (widget.isSiteVisit) {
-        await DioClient.dio.post('/site-visits', data: {
+        final svId = FirebaseFirestore.instance.collection('site_visits').doc().id;
+        final currentUser = RoleGuard.currentUser;
+        await FirebaseFirestore.instance.collection('site_visits').doc(svId).set({
+          'id': svId,
           'requirement_id': widget.requirement.id,
           'visit_date': scheduledDateTime.toUtc().toIso8601String(),
           'remarks': remarks,
+          'status': 'Scheduled',
+          'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+          'deleted_at': null,
+          'created_by': currentUser?.id ?? 'System',
+          'organization_id': currentUser?.organizationId ?? '',
         });
 
         if (widget.updateStatusOnSave) {
@@ -2651,12 +2660,21 @@ class _RequirementStepperDialogState extends State<RequirementStepperDialog> {
           );
         }
       } else {
-        await DioClient.dio.post('/followups', data: {
+        final fId = FirebaseFirestore.instance.collection('followups').doc().id;
+        final currentUser = RoleGuard.currentUser;
+        await FirebaseFirestore.instance.collection('followups').doc(fId).set({
+          'id': fId,
           'client_name': widget.requirement.clientName,
           'mobile': widget.requirement.clientMobile,
           'notes': remarks,
           'followup_date': scheduledDateTime.toUtc().toIso8601String(),
           'requirement_id': widget.requirement.id,
+          'status': 'Pending',
+          'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+          'deleted_at': null,
+          'created_by': currentUser?.id ?? 'System',
+          'organization_id': currentUser?.organizationId ?? '',
         });
 
         if (widget.updateStatusOnSave) {
