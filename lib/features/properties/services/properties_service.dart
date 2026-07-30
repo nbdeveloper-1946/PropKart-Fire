@@ -68,27 +68,18 @@ class PropertiesService {
         query = query.where("deleted_at", isNull: true);
       }
 
-      if (categoryId != null && categoryId.isNotEmpty) {
-        query = query.where("category_id", isEqualTo: categoryId);
-      }
-      if (areaId != null && areaId.isNotEmpty) {
-        query = query.where("area_id", isEqualTo: areaId);
-      }
-      if (listingTypeId != null && listingTypeId.isNotEmpty) {
-        query = query.where("listing_type_id", isEqualTo: listingTypeId);
-      }
-      if (createdBy != null && createdBy.isNotEmpty) {
-        query = query.where("created_by", isEqualTo: createdBy);
-      }
-      if (isVerified != null) {
-        query = query.where("is_verified", isEqualTo: isVerified);
-      }
-
       final snapshot = await query.get();
       final List<Map<String, dynamic>> propertiesList = [];
 
       for (final doc in snapshot.docs) {
         final data = doc.data() as Map<String, dynamic>;
+        
+        // In-memory filters to avoid composite index requirements
+        if (categoryId != null && categoryId.isNotEmpty && data['category_id'] != categoryId) continue;
+        if (areaId != null && areaId.isNotEmpty && data['area_id'] != areaId) continue;
+        if (listingTypeId != null && listingTypeId.isNotEmpty && data['listing_type_id'] != listingTypeId) continue;
+        if (createdBy != null && createdBy.isNotEmpty && data['created_by'] != createdBy) continue;
+        if (isVerified != null && data['is_verified'] != isVerified) continue;
         final id = doc.id;
         final map = {
           ...data,

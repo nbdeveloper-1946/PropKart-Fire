@@ -9,7 +9,7 @@ class DashboardService {
       // 1. Fetch collections
       final propsSnapshot = await FirebaseFirestore.instance.collection("properties").where("deleted_at", isNull: true).get();
       final reqsSnapshot = await FirebaseFirestore.instance.collection("requirements").where("deleted_at", isNull: true).get();
-      final usersSnapshot = await FirebaseFirestore.instance.collection("users").where("deleted_at", isNull: true).where("is_active", isEqualTo: true).get();
+      final usersSnapshot = await FirebaseFirestore.instance.collection("users").where("deleted_at", isNull: true).get();
       final followupsSnapshot = await FirebaseFirestore.instance.collection("followups").where("deleted_at", isNull: true).get();
       final visitsSnapshot = await FirebaseFirestore.instance.collection("site_visits").where("deleted_at", isNull: true).get();
       final checklistSnapshot = await FirebaseFirestore.instance.collection("checklists").get();
@@ -17,7 +17,7 @@ class DashboardService {
       // Convert docs
       final properties = propsSnapshot.docs.map((doc) => doc.data()).toList();
       final requirements = reqsSnapshot.docs.map((doc) => doc.data()).toList();
-      final usersCount = usersSnapshot.docs.length;
+      final usersCount = usersSnapshot.docs.where((doc) => doc.data()['is_active'] == true).length;
 
       // 2. Count statuses and listing types
       int totalProperties = properties.length;

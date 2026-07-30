@@ -56,24 +56,18 @@ class RequirementsService {
         query = query.where("deleted_at", isNull: true);
       }
 
-      if (configurationId != null && configurationId.isNotEmpty) {
-        query = query.where("configuration_id", isEqualTo: configurationId);
-      }
-      if (propertyTypeId != null && propertyTypeId.isNotEmpty) {
-        query = query.where("property_type_id", isEqualTo: propertyTypeId);
-      }
-      if (status != null && status != 'All') {
-        query = query.where("status", isEqualTo: status);
-      }
-      if (listingTypeId != null && listingTypeId.isNotEmpty) {
-        query = query.where("listing_type_id", isEqualTo: listingTypeId);
-      }
-
       final snapshot = await query.get();
       final List<Map<String, dynamic>> requirementsList = [];
 
       for (final doc in snapshot.docs) {
         final data = doc.data() as Map<String, dynamic>;
+        
+        // In-memory filters to avoid composite index requirements
+        if (configurationId != null && configurationId.isNotEmpty && data['configuration_id'] != configurationId) continue;
+        if (propertyTypeId != null && propertyTypeId.isNotEmpty && data['property_type_id'] != propertyTypeId) continue;
+        if (status != null && status != 'All' && data['status'] != status) continue;
+        if (listingTypeId != null && listingTypeId.isNotEmpty && data['listing_type_id'] != listingTypeId) continue;
+        
         final id = doc.id;
         final map = {
           ...data,
