@@ -5,6 +5,7 @@ import 'package:propkart/core/storage/isar_collections.dart';
 import 'package:propkart/core/storage/model_mappers.dart';
 import 'package:propkart/core/storage/performance_logger.dart';
 import 'package:propkart/core/security/role_guard.dart';
+import 'package:propkart/core/utils/logger.dart';
 
 class DashboardRepository {
   final DashboardService _dashboardService = DashboardService();
