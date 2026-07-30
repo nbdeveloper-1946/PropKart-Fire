@@ -1046,7 +1046,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       if (!item.id.startsWith('temp_')) {
                         try {
                           await _updateLocalChecklistState(item.id, val);
-                          await DioClient.dio.patch('/checklist/${item.id}/toggle', data: {'is_completed': val});
+                          await FirebaseFirestore.instance.collection('checklists').doc(item.id).update({
+                            'is_completed': val,
+                            'updated_at': DateTime.now().toIso8601String(),
+                          });
                           if (mounted) {
                             context.read<DashboardBloc>().add(RefreshDashboard());
                           }
@@ -1101,7 +1104,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     if (!itemId.startsWith('temp_')) {
                       try {
                         await _deleteLocalChecklistItem(itemId);
-                        await DioClient.dio.delete('/checklist/$itemId');
+                        await FirebaseFirestore.instance.collection('checklists').doc(itemId).delete();
                         if (mounted) {
                           context.read<DashboardBloc>().add(RefreshDashboard());
                         }
@@ -1171,7 +1174,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   });
                   Navigator.pop(ctx);
                   try {
-                    await DioClient.dio.post('/checklist', data: {'title': title});
+                    final cId = FirebaseFirestore.instance.collection('checklists').doc().id;
+                    final currentUser = RoleGuard.currentUser;
+                    await FirebaseFirestore.instance.collection('checklists').doc(cId).set({
+                      'id': cId,
+                      'title': title,
+                      'task': title,
+                      'is_completed': false,
+                      'created_at': DateTime.now().toIso8601String(),
+                      'updated_at': DateTime.now().toIso8601String(),
+                      'created_by': currentUser?.id ?? 'System',
+                      'organization_id': currentUser?.organizationId ?? '',
+                    });
                     if (mounted) {
                       context.read<DashboardBloc>().add(RefreshDashboard());
                     }

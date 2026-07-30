@@ -95,7 +95,8 @@ class DashboardService {
         final data = doc.data();
         checklistList.add({
           'id': doc.id,
-          'task': data['task'] ?? '',
+          'title': data['title'] ?? data['task'] ?? '',
+          'task': data['title'] ?? data['task'] ?? '',
           'is_completed': data['is_completed'] ?? false,
         });
       }
