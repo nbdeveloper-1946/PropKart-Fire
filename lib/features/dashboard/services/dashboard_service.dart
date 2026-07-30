@@ -14,13 +14,27 @@ class DashboardService {
       final visitsSnapshot = await FirebaseFirestore.instance.collection("site_visits").where("deleted_at", isNull: true).get();
       final checklistSnapshot = await FirebaseFirestore.instance.collection("checklists").get();
 
-      // Fetch status and listing types to resolve available/rent IDs dynamically
+      // Fetch status and listing types to resolve available/rent/sold/rented IDs dynamically
       final statusSnapshot = await FirebaseFirestore.instance.collection("property_status").get();
       final typesSnapshot = await FirebaseFirestore.instance.collection("listing_types").get();
 
       // Resolve "Available" status IDs
       final availableStatusIds = statusSnapshot.docs
           .where((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().contains('avail'))
+          .map((doc) => doc.id)
+          .toSet();
+
+      // Resolve "Sold" status IDs
+      final soldStatusIds = statusSnapshot.docs
+          .where((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().contains('sold') ||
+                           (doc.data()['name'] as String? ?? '').toLowerCase().contains('close'))
+          .map((doc) => doc.id)
+          .toSet();
+
+      // Resolve "Rented" status IDs
+      final rentedStatusIds = statusSnapshot.docs
+          .where((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().contains('rented') ||
+                           (doc.data()['name'] as String? ?? '').toLowerCase().contains('lease'))
           .map((doc) => doc.id)
           .toSet();
 
@@ -40,6 +54,10 @@ class DashboardService {
       int available = 0;
       int rentalAvailable = 0;
       int resaleAvailable = 0;
+      int sold = 0;
+      int rented = 0;
+      int rentalRented = 0;
+      int resaleSold = 0;
 
       for (final p in properties) {
         final statusId = p['property_status_id']?.toString() ?? '';
@@ -55,10 +73,30 @@ class DashboardService {
             resaleAvailable++;
           }
         }
+
+        if (soldStatusIds.contains(statusId)) {
+          sold++;
+          resaleSold++;
+        }
+
+        if (rentedStatusIds.contains(statusId)) {
+          rented++;
+          rentalRented++;
+        }
       }
 
       int activeRequirements = requirements.where((r) =>
         !["Won", "Dead", "Not Interested", "Bin"].contains(r['status'])
+      ).length;
+
+      int rentalWonRequirements = requirements.where((r) =>
+        (r['status'] == 'Won' || r['status'] == 'Closed') &&
+        rentListingTypeIds.contains(r['listing_type_id']?.toString())
+      ).length;
+
+      int resaleWonRequirements = requirements.where((r) =>
+        (r['status'] == 'Won' || r['status'] == 'Closed') &&
+        !rentListingTypeIds.contains(r['listing_type_id']?.toString())
       ).length;
 
       // 3. Populate lists
@@ -104,18 +142,18 @@ class DashboardService {
       final summary = {
         "totalProperties": totalProperties,
         "available": available,
-        "sold": 0,
-        "rented": 0,
+        "sold": sold,
+        "rented": rented,
         "requirements": activeRequirements,
         "users": usersCount,
         "rentalAvailable": rentalAvailable,
         "resaleAvailable": resaleAvailable,
-        "rentalRented": 0,
-        "resaleSold": 0,
+        "rentalRented": rentalRented,
+        "resaleSold": resaleSold,
         "rentalRequirements": requirements.where((r) => rentListingTypeIds.contains(r['listing_type_id']?.toString())).length,
         "resaleRequirements": requirements.where((r) => !rentListingTypeIds.contains(r['listing_type_id']?.toString())).length,
-        "rentalWonRequirements": 0,
-        "resaleWonRequirements": 0,
+        "rentalWonRequirements": rentalWonRequirements,
+        "resaleWonRequirements": resaleWonRequirements,
         "totalPropertiesTrend": 0,
         "availableTrend": 0,
         "soldTrend": 0,

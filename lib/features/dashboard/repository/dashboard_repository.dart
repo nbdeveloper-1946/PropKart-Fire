@@ -1,63 +1,44 @@
 import 'package:propkart/features/dashboard/models/dashboard_summary.dart';
 import 'package:propkart/features/dashboard/services/dashboard_service.dart';
-import 'package:propkart/core/storage/repository_coordinator.dart';
-import 'package:propkart/core/storage/isar_collections.dart';
-import 'package:propkart/core/storage/model_mappers.dart';
-import 'package:propkart/core/storage/performance_logger.dart';
+import 'package:propkart/features/requirements/services/requirements_service.dart';
+import 'package:propkart/features/requirements/models/requirement_model.dart';
 import 'package:propkart/core/security/role_guard.dart';
-import 'package:propkart/core/utils/logger.dart';
 
 class DashboardRepository {
   final DashboardService _dashboardService = DashboardService();
-  final RepositoryCoordinator _coordinator = RepositoryCoordinator();
-
-
+  final RequirementsService _requirementsService = RequirementsService();
 
   Future<DashboardData> getDashboardData({bool forceRefresh = false}) async {
-    final start = DateTime.now();
-    
-    // Read from local Isar
-    final localDashboard = await _coordinator.dashboardLocal.getDashboard();
-    final isarReadMs = DateTime.now().difference(start).inMilliseconds;
-    
-    DashboardData? cachedData;
-    int jsonParseMs = 0;
-    if (localDashboard != null) {
-      final parseStart = DateTime.now();
-      cachedData = localDashboard.toModel();
-      jsonParseMs = DateTime.now().difference(parseStart).inMilliseconds;
-    }
+    final response = await _dashboardService.getDashboardData();
+    final model = DashboardData.fromJson(response);
 
-    final totalMs = DateTime.now().difference(start).inMilliseconds;
-    PerformanceLogger().logMetric(
-      operation: 'DashboardRepository.getDashboardData (local)',
-      isarReadMs: isarReadMs,
-      jsonParseMs: jsonParseMs,
-      totalMs: totalMs,
-    );
+    // Fetch requirements to apply RBAC filtering and dynamic counts
+    final reqsResponse = await _requirementsService.getRequirements();
+    final list = reqsResponse['data']?['requirements'] as List? ?? [];
+    var requirements = list.map((item) => RequirementModel.fromJson(item)).toList();
 
-    // Get the dynamic counts of requirements to ensure they are always correct and in sync
-    var localReqs = await _coordinator.requirementLocal.getRequirements();
     final currentUser = RoleGuard.currentUser;
     if (currentUser != null) {
       final role = currentUser.role;
       if (role == 'Admin') {
-        localReqs = localReqs.where((r) =>
+        requirements = requirements.where((r) =>
           r.createdBy == currentUser.id || r.adminId == currentUser.id
         ).toList();
       } else if (role != 'Super Admin') {
-        localReqs = localReqs.where((r) =>
+        requirements = requirements.where((r) =>
           r.createdBy == currentUser.id
         ).toList();
       }
     }
+
     int rentalReqs = 0;
     int resaleReqs = 0;
     int rentalWonReqs = 0;
     int resaleWonReqs = 0;
     int rentalSiteVisits = 0;
     int resaleSiteVisits = 0;
-    for (final item in localReqs) {
+
+    for (final item in requirements) {
       if (item.status == 'Bin') continue;
 
       final name = item.listingTypeName ?? '';
@@ -90,8 +71,8 @@ class DashboardRepository {
       }
     }
 
-    final allowedReqIds = localReqs.map((r) => r.id).toSet();
-    final allowedClientNames = localReqs.map((r) => r.clientName.toLowerCase()).toSet();
+    final allowedReqIds = requirements.map((r) => r.id).toSet();
+    final allowedClientNames = requirements.map((r) => r.clientName.toLowerCase()).toSet();
 
     bool isAllowedItem(String? reqId, String? clientName) {
       if (reqId != null && reqId.isNotEmpty) return allowedReqIds.contains(reqId);
@@ -99,66 +80,17 @@ class DashboardRepository {
       return false;
     }
 
-    if (cachedData != null && !forceRefresh) {
-      final updatedSummary = DashboardSummary(
-        totalProperties: cachedData.summary.totalProperties,
-        available: cachedData.summary.available,
-        sold: resaleSiteVisits,
-        rented: rentalSiteVisits,
-        requirements: rentalReqs + resaleReqs,
-        users: cachedData.summary.users,
-        rentalAvailable: cachedData.summary.rentalAvailable,
-        resaleAvailable: cachedData.summary.resaleAvailable,
-        rentalRented: rentalSiteVisits,
-        resaleSold: resaleSiteVisits,
-        rentalRequirements: rentalReqs,
-        resaleRequirements: resaleReqs,
-        rentalWonRequirements: rentalWonReqs,
-        resaleWonRequirements: resaleWonReqs,
-        totalPropertiesTrend: cachedData.summary.totalPropertiesTrend,
-        availableTrend: cachedData.summary.availableTrend,
-        soldTrend: cachedData.summary.soldTrend,
-        rentedTrend: cachedData.summary.rentedTrend,
-        requirementsTrend: cachedData.summary.requirementsTrend,
-        topBroker: cachedData.summary.topBroker,
-        topArea: cachedData.summary.topArea,
-        topProperty: cachedData.summary.topProperty,
-        monthlyGrowth: cachedData.summary.monthlyGrowth,
-      );
-
-      final filteredFollowups = cachedData.followups.where((f) =>
-        isAllowedItem(f.requirementId, f.requirementCustomerName)
-      ).toList();
-
-      final filteredSiteVisits = cachedData.siteVisits.where((sv) =>
-        isAllowedItem(sv.requirementId, sv.requirementCustomerName)
-      ).toList();
-
-      return DashboardData(   summary: updatedSummary,
-        activity: cachedData.activity,
-        recentProperties: cachedData.recentProperties,
-        checklist: cachedData.checklist,
-        followups: filteredFollowups,
-        siteVisits: filteredSiteVisits,
-      );
-    }
-
-    // Fallback if cache is completely empty on first launch
-    final data = await _dashboardService.getDashboardData();
-    final model = DashboardData.fromJson(data);
-    await _coordinator.dashboardLocal.saveDashboard(model.toLocal());
-
     final updatedSummary = DashboardSummary(
       totalProperties: model.summary.totalProperties,
       available: model.summary.available,
-      sold: resaleSiteVisits,
-      rented: rentalSiteVisits,
+      sold: model.summary.sold,
+      rented: model.summary.rented,
       requirements: rentalReqs + resaleReqs,
       users: model.summary.users,
       rentalAvailable: model.summary.rentalAvailable,
       resaleAvailable: model.summary.resaleAvailable,
-      rentalRented: rentalSiteVisits,
-      resaleSold: resaleSiteVisits,
+      rentalRented: model.summary.rentalRented,
+      resaleSold: model.summary.resaleSold,
       rentalRequirements: rentalReqs,
       resaleRequirements: resaleReqs,
       rentalWonRequirements: rentalWonReqs,
@@ -190,40 +122,5 @@ class DashboardRepository {
       followups: filteredFollowups,
       siteVisits: filteredSiteVisits,
     );
-  }
-
-  void _triggerBackgroundDashboardRefresh() {
-    final start = DateTime.now();
-    _dashboardService.getDashboardData().then((response) async {
-      final networkMs = DateTime.now().difference(start).inMilliseconds;
-
-      final parseStart = DateTime.now();
-      final freshData = DashboardData.fromJson(response);
-      final jsonParseMs = DateTime.now().difference(parseStart).inMilliseconds;
-
-      final writeStart = DateTime.now();
-      // Save locally to dashboard local table
-      await _coordinator.dashboardLocal.saveDashboard(freshData.toLocal());
-      
-      // Also synchronize structured followups table inside Isar
-      final listData = response['followups'] as List? ?? [];
-      final freshFollowups = listData.map((item) => DashboardFollowup.fromJson(item)).toList();
-      final localEntities = freshFollowups.map((f) => f.toLocal('System')).toList();
-      await _coordinator.followupLocal.saveFollowups(localEntities);
-      final isarWriteMs = DateTime.now().difference(writeStart).inMilliseconds;
-
-      final totalMs = DateTime.now().difference(start).inMilliseconds;
-      PerformanceLogger().logMetric(
-        operation: 'DashboardRepository.getDashboardData (background refresh)',
-        networkMs: networkMs,
-        jsonParseMs: jsonParseMs,
-        isarWriteMs: isarWriteMs,
-        totalMs: totalMs,
-      );
-
-      _coordinator.refreshDashboard();
-    }).catchError((e) {
-      BeautifulLogger.error("Error during background dashboard refresh", e);
-    });
   }
 }

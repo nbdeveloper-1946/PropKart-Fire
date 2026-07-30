@@ -39,6 +39,28 @@ class RequirementsService {
     return enriched;
   }
 
+  Future<Map<String, dynamic>> getRequirementById(String id) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('requirements').doc(id).get();
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>;
+        final map = {
+          ...data,
+          'id': id,
+        };
+        final hydrated = await _hydrateRequirement(map);
+        return {
+          "success": true,
+          "data": {"requirement": hydrated}
+        };
+      }
+      return {"success": false};
+    } catch (e) {
+      BeautifulLogger.error("Failed to fetch requirement by ID from Firestore", e);
+      return {"success": false};
+    }
+  }
+
   Future<Map<String, dynamic>> getRequirements({
     String? search,
     String? configurationId,

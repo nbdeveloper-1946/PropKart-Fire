@@ -50,6 +50,28 @@ class PropertiesService {
     return enriched;
   }
 
+  Future<Map<String, dynamic>> getPropertyById(String id) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('properties').doc(id).get();
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>;
+        final map = {
+          ...data,
+          'id': id,
+        };
+        final hydrated = await _hydrateProperty(map);
+        return {
+          "success": true,
+          "data": {"property": hydrated}
+        };
+      }
+      return {"success": false};
+    } catch (e) {
+      BeautifulLogger.error("Failed to fetch property by ID from Firestore", e);
+      return {"success": false};
+    }
+  }
+
   Future<Map<String, dynamic>> getProperties({
     String? search,
     String? categoryId,
