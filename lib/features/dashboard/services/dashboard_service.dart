@@ -14,6 +14,22 @@ class DashboardService {
       final visitsSnapshot = await FirebaseFirestore.instance.collection("site_visits").where("deleted_at", isNull: true).get();
       final checklistSnapshot = await FirebaseFirestore.instance.collection("checklists").get();
 
+      // Fetch status and listing types to resolve available/rent IDs dynamically
+      final statusSnapshot = await FirebaseFirestore.instance.collection("property_status").get();
+      final typesSnapshot = await FirebaseFirestore.instance.collection("listing_types").get();
+
+      // Resolve "Available" status IDs
+      final availableStatusIds = statusSnapshot.docs
+          .where((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().contains('avail'))
+          .map((doc) => doc.id)
+          .toSet();
+
+      // Resolve "Rent" listing type IDs
+      final rentListingTypeIds = typesSnapshot.docs
+          .where((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().contains('rent'))
+          .map((doc) => doc.id)
+          .toSet();
+
       // Convert docs
       final properties = propsSnapshot.docs.map((doc) => doc.data()).toList();
       final requirements = reqsSnapshot.docs.map((doc) => doc.data()).toList();
@@ -29,13 +45,11 @@ class DashboardService {
         final statusId = p['property_status_id']?.toString() ?? '';
         final listingId = p['listing_type_id']?.toString() ?? '';
 
-        // Check if status is available
-        // Standard "Available" status uuid in the database is "7fb832cf-07b9-4a94-bd2c-63b72355523d" (from PostgreSQL seeding)
-        final isAvailable = statusId == '7fb832cf-07b9-4a94-bd2c-63b72355523d' || statusId.toLowerCase().contains('avail');
+        final isAvailable = availableStatusIds.contains(statusId);
         if (isAvailable) {
           available++;
-          // Standard Rent status uuid is "6ea71717-b9f2-4bdc-bbbd-570a256191ef"
-          if (listingId == '6ea71717-b9f2-4bdc-bbbd-570a256191ef' || listingId.toLowerCase().contains('rent')) {
+          final isRent = rentListingTypeIds.contains(listingId);
+          if (isRent) {
             rentalAvailable++;
           } else {
             resaleAvailable++;
@@ -95,8 +109,8 @@ class DashboardService {
         "resaleAvailable": resaleAvailable,
         "rentalRented": 0,
         "resaleSold": 0,
-        "rentalRequirements": requirements.where((r) => r['listing_type_id'] == '6ea71717-b9f2-4bdc-bbbd-570a256191ef').length,
-        "resaleRequirements": requirements.where((r) => r['listing_type_id'] != '6ea71717-b9f2-4bdc-bbbd-570a256191ef').length,
+        "rentalRequirements": requirements.where((r) => rentListingTypeIds.contains(r['listing_type_id']?.toString())).length,
+        "resaleRequirements": requirements.where((r) => !rentListingTypeIds.contains(r['listing_type_id']?.toString())).length,
         "rentalWonRequirements": 0,
         "resaleWonRequirements": 0,
         "totalPropertiesTrend": 0,

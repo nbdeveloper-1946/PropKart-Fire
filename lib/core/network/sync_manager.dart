@@ -445,10 +445,10 @@ class SyncManager {
       final builderRes = await BuildersService().getBuilders();
       final ownerRes = await OwnersService().getOwners();
 
-      final List<dynamic> serverProperties = propRes['data']?['properties'] ?? [];
-      final List<dynamic> serverRequirements = reqRes['data']?['requirements'] ?? [];
-      final List<dynamic> serverBuilders = builderRes['data']?['builders'] ?? [];
-      final List<dynamic> serverOwners = ownerRes['data']?['owners'] ?? [];
+      final List<dynamic> serverProperties = propRes['properties'] ?? propRes['data']?['properties'] ?? [];
+      final List<dynamic> serverRequirements = reqRes['requirements'] ?? reqRes['data']?['requirements'] ?? [];
+      final List<dynamic> serverBuilders = builderRes['builders'] ?? builderRes['data']?['builders'] ?? [];
+      final List<dynamic> serverOwners = ownerRes['owners'] ?? ownerRes['data']?['owners'] ?? [];
 
       // 2. Perform Conflict Detection before replaying outbox
       final outboxItems = await _coordinator.outboxLocal.getQueuedRequests();
