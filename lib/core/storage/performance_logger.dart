@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:propkart/core/utils/logger.dart';
 
 class PerformanceLogger {
   static final PerformanceLogger _instance = PerformanceLogger._internal();
@@ -43,7 +44,14 @@ class PerformanceLogger {
     }
 
     // Print structured telemetry to developer console
-    print("⏱️ [TELEMETRY] $operation | IsarRead: ${isarReadMs}ms | Network: ${networkMs}ms | Parse: ${jsonParseMs}ms | IsarWrite: ${isarWriteMs}ms | Total: ${totalMs}ms");
+    BeautifulLogger.logTelemetry(
+      operation,
+      isarReadMs: isarReadMs,
+      networkMs: networkMs,
+      jsonParseMs: jsonParseMs,
+      isarWriteMs: isarWriteMs,
+      totalMs: totalMs,
+    );
 
     // Write to persistent local log file
     try {

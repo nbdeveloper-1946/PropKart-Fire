@@ -2,9 +2,8 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http_parser/http_parser.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:propkart/core/api/dio_client.dart';
 import '../../tokens/app_colors.dart';
 import '../../tokens/app_spacing.dart';
@@ -94,48 +93,26 @@ class _CRMVideoPickerState extends State<CRMVideoPicker> {
     });
 
     try {
-      MultipartFile multipartFile;
-      final mimeType = _lookupMimeType(pickedFile.name);
-
+      final String filename = 'properties/videos/${DateTime.now().millisecondsSinceEpoch}_${pickedFile.name}';
+      final fileRef = FirebaseStorage.instance.ref().child(filename);
+      
       if (kIsWeb) {
         final bytes = await pickedFile.readAsBytes();
         if (bytes.length > 50 * 1024 * 1024) {
           throw Exception("Video size exceeds the 50 MB limit.");
         }
-        multipartFile = MultipartFile.fromBytes(
-          bytes,
-          filename: pickedFile.name,
-          contentType: MediaType.parse(mimeType),
-        );
+        await fileRef.putData(bytes);
       } else {
         final file = File(pickedFile.path);
         final length = await file.length();
         if (length > 50 * 1024 * 1024) {
           throw Exception("Video size exceeds the 50 MB limit.");
         }
-        multipartFile = await MultipartFile.fromFile(
-          file.path,
-          filename: pickedFile.name,
-          contentType: MediaType.parse(mimeType),
-        );
+        await fileRef.putFile(file);
       }
 
-      final formData = FormData.fromMap({
-        'file': multipartFile,
-      });
-
-      final dio = DioClient.dio;
-      final response = await dio.post(
-        widget.uploadEndpoint,
-        data: formData,
-      );
-
-      if (response.statusCode == 201 && response.data['success'] == true) {
-        final url = response.data['data']['url'] as String;
-        widget.onVideoAdded(url);
-      } else {
-        throw Exception(response.data['message'] ?? "Upload failed.");
-      }
+      final url = await fileRef.getDownloadURL();
+      widget.onVideoAdded(url);
     } catch (e) {
       setState(() {
         _uploadError = e.toString().replaceAll("Exception: ", "");

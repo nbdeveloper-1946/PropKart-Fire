@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:dio/dio.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:propkart/core/api/api_constants.dart';
 import 'package:propkart/core/api/api_client.dart';
 import 'package:propkart/core/storage/isar_service.dart';
@@ -23,6 +24,7 @@ import 'package:propkart/features/owners/services/owners_service.dart';
 import 'package:propkart/core/storage/model_mappers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:propkart/features/properties/repository/properties_repository.dart';
+import 'package:propkart/core/utils/logger.dart';
 
 enum SyncState {
   disconnected,
@@ -57,27 +59,25 @@ class SyncManager {
       final prefs = await SharedPreferences.getInstance();
       final clientVersion = prefs.getInt('last_lookup_version') ?? 0;
       
-      int serverVersion = 0;
+      int serverVersion = 1;
       try {
-        final response = await ApiClient().get('/sync/status');
-        serverVersion = response.data['schemaVersion'] ?? 0;
-      } catch (e) {
-        print("⚠️ [SYNC ENGINE] Failed to fetch sync status: $e");
-        final lookupCount = await _coordinator.lookupLocal.getLookupsCount();
-        if (lookupCount == 0) {
-          rethrow;
+        final doc = await FirebaseFirestore.instance.collection('config').doc('sync_status').get();
+        if (doc.exists) {
+          serverVersion = doc.data()?['schemaVersion'] ?? 1;
         }
+      } catch (e) {
+        BeautifulLogger.warning("Failed to fetch Firestore config status, defaulting to 1: $e");
       }
       
       final lookupCount = await _coordinator.lookupLocal.getLookupsCount();
       if (lookupCount == 0 || serverVersion != clientVersion) {
-        print("🔄 [SYNC ENGINE] Lookup version mismatch or empty. Downloading lookup tables...");
+        BeautifulLogger.sync("Lookup version mismatch or empty. Downloading lookup tables...");
         await PropertiesRepository().fetchAndSaveMetadata();
         if (serverVersion > 0) {
           await prefs.setInt('last_lookup_version', serverVersion);
         }
       } else {
-        print("✅ [SYNC ENGINE] Lookup tables up to date (version: $clientVersion). Skipping lookup sync.");
+        BeautifulLogger.success("Lookup tables up to date (version: $clientVersion). Skipping lookup sync.");
       }
       
       await triggerDeltaSync();
@@ -110,9 +110,7 @@ class SyncManager {
   void _updateState(SyncState newState) {
     _state = newState;
     _stateController.add(newState);
-    if (kDebugMode) {
-      print("🔄 [SYNC STATE] Changed to: $newState");
-    }
+    BeautifulLogger.sync("State Changed to: $newState");
   }
 
   Future<void> connect() async {
@@ -229,7 +227,7 @@ class SyncManager {
         }
       }
     } catch (e) {
-      print("⚠️ [SYNC ERROR] Error parsing raw socket stream: $e");
+      BeautifulLogger.error("Error parsing raw socket stream", e);
     }
   }
 
@@ -293,7 +291,7 @@ class SyncManager {
               throw Exception("Failed to fetch property details: Status ${response.statusCode}");
             }
           } catch (e) {
-            print("⚠️ [SYNC WARNING] Failed to fetch property details for $record, falling back to raw record: $e");
+            BeautifulLogger.warning("Failed to fetch property details for $record, falling back to raw record: $e");
             final enriched = await _enrichRawRecord("properties", record);
             propertiesToPut.add(PropertyModel.fromJson(enriched).toLocal());
           }
@@ -312,7 +310,7 @@ class SyncManager {
               throw Exception("Failed to fetch requirement details: Status ${response.statusCode}");
             }
           } catch (e) {
-            print("⚠️ [SYNC WARNING] Failed to fetch requirement details for $record, falling back to raw record: $e");
+            BeautifulLogger.warning("Failed to fetch requirement details for $record, falling back to raw record: $e");
             final enriched = await _enrichRawRecord("requirements", record);
             requirementsToPut.add(RequirementModel.fromJson(enriched).toLocal());
           }
@@ -373,7 +371,7 @@ class SyncManager {
           }
         });
       } catch (e) {
-        print("⚠️ [SYNC ERROR] Batch write transaction failed: $e");
+        BeautifulLogger.error("Batch write transaction failed", e);
       }
     }
 
@@ -387,19 +385,17 @@ class SyncManager {
       else if (table == "builders") _coordinator.refreshBuilders();
       else if (table == "owners") _coordinator.refreshOwners();
     }
-    final notifyMs = DateTime.now().difference(notifyStart).inMilliseconds;
     final totalMs = DateTime.now().difference(start).inMilliseconds;
 
     PerformanceLogger().logMetric(
-      operation: 'SyncManager: Realtime Event | Tables: ${tablesToRefresh.join(", ")} | Batch: ${batch.length} rows',
+      operation: 'Realtime Event | Tables: ${tablesToRefresh.join(", ")}',
       isarWriteMs: isarWriteMs,
       totalMs: totalMs,
     );
-    print("⏱️ [TELEMETRY] Realtime Event | Tables: ${tablesToRefresh.join(', ')} | Merge: ${isarWriteMs}ms | Notify: ${notifyMs}ms | Total: ${totalMs}ms | Rows: ${batch.length}");
   }
 
   void _handleDisconnect(String reason) {
-    print("🔌 [SYNC DISCONNECT] Reason: $reason");
+    BeautifulLogger.warning("Disconnected. Reason: $reason");
     _heartbeatTimer?.cancel();
     _channelSubscription?.cancel();
     try {
@@ -414,7 +410,7 @@ class SyncManager {
 
     _reconnectAttempts++;
     final backoffSeconds = (_reconnectAttempts * 2).clamp(2, 30);
-    print("🔄 [SYNC RECONNECT] Retrying in $backoffSeconds seconds... (Attempt $_reconnectAttempts)");
+    BeautifulLogger.sync("Retrying in $backoffSeconds seconds... (Attempt $_reconnectAttempts)");
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(Duration(seconds: backoffSeconds), () {
@@ -439,7 +435,7 @@ class SyncManager {
 
   Future<void> triggerDeltaSync() async {
     _updateState(SyncState.syncing);
-    print("🔄 [SYNC ENGINE] Starting Delta Sync...");
+    BeautifulLogger.sync("Starting Delta Sync...");
     final start = DateTime.now();
 
     try {
@@ -469,7 +465,7 @@ class SyncManager {
               final serverUpdatedAt = DateTime.parse(serverItem['updated_at']);
               if (serverUpdatedAt.isAfter(item.createdAt)) {
                 conflictedIds.add(item.id);
-                print("⚠️ [CONFLICT DETECTED] Property $targetId has a newer server edit. Server wins.");
+                BeautifulLogger.warning("Property $targetId has a newer server edit (Conflict). Server wins.");
               }
             }
           } else if (item.endpoint.startsWith('/requirements')) {
@@ -478,7 +474,7 @@ class SyncManager {
               final serverUpdatedAt = DateTime.parse(serverItem['updated_at']);
               if (serverUpdatedAt.isAfter(item.createdAt)) {
                 conflictedIds.add(item.id);
-                print("⚠️ [CONFLICT DETECTED] Requirement $targetId has a newer server edit. Server wins.");
+                BeautifulLogger.warning("Requirement $targetId has a newer server edit (Conflict). Server wins.");
               }
             }
           }
@@ -533,58 +529,95 @@ class SyncManager {
       _coordinator.refreshBuilders();
       _coordinator.refreshOwners();
 
-      final totalMs = DateTime.now().difference(start).inMilliseconds;
-      PerformanceLogger().logMetric(
-        operation: 'SyncManager: Delta Sync completed successfully | Merged: ${pList.length + rList.length} records',
-        totalMs: totalMs,
-      );
-      print("⏱️ [TELEMETRY] Delta Sync completed | Duration: ${totalMs}ms | Conflicts: ${conflictedIds.length}");
-
     } catch (e) {
-      print("⚠️ [SYNC ERROR] Delta Sync failed: $e");
+      BeautifulLogger.error("Delta Sync failed", e);
     }
   }
 
   Future<void> processOutboxQueue() async {
-    print("📤 [SYNC ENGINE] Replaying Outbox Queue...");
+    BeautifulLogger.sync("Replaying Outbox Queue...");
     final start = DateTime.now();
     final outboxItems = await _coordinator.outboxLocal.getQueuedRequests();
 
     if (outboxItems.isEmpty) return;
 
-    final apiClient = ApiClient();
     int replayedCount = 0;
 
     for (final item in outboxItems) {
       try {
         final payload = jsonDecode(item.payloadJson) as Map<String, dynamic>;
+        final uriParts = item.endpoint.split('/');
+        if (uriParts.length < 2) continue;
 
-        Response? response;
+        String collectionName = uriParts[1];
+        String? docId = uriParts.length > 2 ? uriParts[2] : null;
+
+        // Route subpaths
+        if (item.endpoint == '/properties/cities') {
+          collectionName = 'cities';
+          docId = payload['id'];
+        } else if (item.endpoint == '/properties/areas') {
+          collectionName = 'areas';
+          docId = payload['id'];
+        } else if (item.endpoint == '/properties/amenities') {
+          collectionName = 'amenities';
+          docId = payload['id'];
+        }
+
+        BeautifulLogger.sync("Replaying outbox item: ${item.method} ${item.endpoint}");
+
         if (item.method == 'POST') {
-          response = await apiClient.post(item.endpoint, payload);
-        } else if (item.method == 'PUT') {
-          response = await apiClient.put(item.endpoint, payload);
-        } else if (item.method == 'DELETE') {
-          response = await apiClient.delete(item.endpoint);
+          final targetId = payload['id'] ?? docId ?? FirebaseFirestore.instance.collection(collectionName).doc().id;
+          final docData = {
+            ...payload,
+            'id': targetId,
+            'created_at': payload['created_at'] ?? DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+            'deleted_at': null,
+          };
+          await FirebaseFirestore.instance.collection(collectionName).doc(targetId).set(docData);
+
+          // For cities, areas, and amenities, also write to lookups collection
+          if (['cities', 'areas', 'amenities'].contains(collectionName)) {
+            final String category = collectionName == 'cities' ? 'city' : (collectionName == 'areas' ? 'area' : 'amenity');
+            final String name = payload['city_name'] ?? payload['area_name'] ?? payload['name'] ?? 'N/A';
+            await FirebaseFirestore.instance.collection('lookups').doc(targetId).set({
+              'id': targetId,
+              'category': category,
+              'name': name,
+            });
+          }
+        } else if (item.method == 'PUT' && docId != null) {
+          final docData = {
+            ...payload,
+            'updated_at': DateTime.now().toIso8601String(),
+          };
+          await FirebaseFirestore.instance.collection(collectionName).doc(docId).update(docData);
+        } else if (item.method == 'DELETE' && docId != null) {
+          if (item.endpoint.endsWith('/permanent')) {
+            await FirebaseFirestore.instance.collection(collectionName).doc(docId).delete();
+          } else {
+            await FirebaseFirestore.instance.collection(collectionName).doc(docId).update({
+              'deleted_at': DateTime.now().toIso8601String(),
+              'updated_at': DateTime.now().toIso8601String(),
+            });
+          }
         }
 
-        if (response != null && (response.statusCode == 200 || response.statusCode == 201)) {
-          await _coordinator.outboxLocal.removeRequest(item.id);
-          replayedCount++;
-        }
+        await _coordinator.outboxLocal.removeRequest(item.id);
+        replayedCount++;
       } catch (e) {
-        print("⚠️ [SYNC ERROR] Outbox replay failed for ${item.endpoint}: $e");
-        break; // Stop replaying on network failure, retry on next cycle
+        BeautifulLogger.error("Outbox replay failed for ${item.endpoint}", e);
+        break; // Stop replaying on failure, retry on next cycle
       }
     }
 
     if (replayedCount > 0) {
       final totalMs = DateTime.now().difference(start).inMilliseconds;
       PerformanceLogger().logMetric(
-        operation: 'SyncManager: Replayed $replayedCount outbox items successfully',
+        operation: 'Replayed $replayedCount outbox items',
         totalMs: totalMs,
       );
-      print("⏱️ [TELEMETRY] Outbox Replay completed | Replayed: $replayedCount | Duration: ${totalMs}ms");
     }
   }
 

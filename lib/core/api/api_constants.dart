@@ -21,12 +21,11 @@ class ApiConstants {
   /// Anon key is public-by-design for Supabase; security depends on RLS.
   static const supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://sopbhhpvyorspvtcwkxb.supabase.co',
+    defaultValue: '',
   );
   static const supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvcGJoaHB2eW9yc3B2dGN3a3hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MjY0MDgsImV4cCI6MjA5OTUwMjQwOH0.O_mQkMfmkP4E3NwYjxpAdL080TevKA8qFtGhV6rFEqo',
+    defaultValue: '',
   );
 
   static bool get hasSupabaseConfig =>

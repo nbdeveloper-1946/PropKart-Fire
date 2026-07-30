@@ -1,10 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:pub_semver/pub_semver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../../core/api/dio_client.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AppConfigModel {
   final bool maintenanceMode;
@@ -79,7 +78,6 @@ class ConfigService {
   static const String _lastCheckedKey = 'config_last_checked_timestamp';
 
   Future<AppConfigModel> fetchAppConfig() async {
-    // Return early if running under test to avoid network hang
     try {
       if (Platform.environment.containsKey('FLUTTER_TEST')) {
         return AppConfigModel(
@@ -102,38 +100,42 @@ class ConfigService {
 
     final prefs = await SharedPreferences.getInstance();
     
-    // 1. Resolve dynamic version info safely
     String currentVersion = "1.0.0";
     try {
       final packageInfo = await PackageInfo.fromPlatform();
       currentVersion = packageInfo.version;
-    } catch (_) {
-      // Graceful fallback for missing native channel integration
-    }
+    } catch (_) {}
 
     try {
-      // 2. Query backend configuration endpoint
-      final response = await DioClient.dio.get(
-        '/config',
-        queryParameters: {'app_version': currentVersion},
-      );
+      final doc = await FirebaseFirestore.instance.collection('config').doc('app_config').get();
 
-      if (response.statusCode == 200 && response.data != null) {
-        final payload = response.data['data'] as Map<String, dynamic>;
+      if (doc.exists) {
+        final payload = doc.data()!;
         
-        // Save fetched data to local SharedPreferences cache
-        await prefs.setString(_cacheKey, json.encode(payload));
+        final minVersion = payload['min_version']?.toString() ?? '1.0.0';
+        final maxVersion = payload['max_version']?.toString() ?? '1.0.0';
+
+        final recalculatedStatus = _calculateVersionStatus(
+          currentVersion: currentVersion,
+          minVersion: minVersion,
+          maxVersion: maxVersion,
+        );
+
+        final completeMap = {
+          ...payload,
+          'versionStatus': recalculatedStatus,
+        };
+
+        await prefs.setString(_cacheKey, json.encode(completeMap));
         await prefs.setString(_lastCheckedKey, DateTime.now().toIso8601String());
 
-        return AppConfigModel.fromJson(payload);
+        return AppConfigModel.fromJson(completeMap);
       }
     } catch (e) {
-      // Offline/Timeout Fallback: Retrieve configuration from local cache
       final cachedJsonString = prefs.getString(_cacheKey);
       if (cachedJsonString != null) {
         final Map<String, dynamic> cachedMap = json.decode(cachedJsonString);
         
-        // Recalculate versionStatus locally based on current client version vs cached min/max version limits
         final config = AppConfigModel.fromJson(cachedMap);
         final recalculatedStatus = _calculateVersionStatus(
           currentVersion: currentVersion,
@@ -146,7 +148,6 @@ class ConfigService {
       }
     }
 
-    // Default configuration if completely offline on first launch
     return AppConfigModel(
       maintenanceMode: false,
       maintenanceMessage: '',
@@ -179,9 +180,7 @@ class ConfigService {
       } else if (clientSemver < maxSemver) {
         return 'softUpdate';
       }
-    } catch (e) {
-      // Graceful fallback to latest on version parsing errors
-    }
+    } catch (e) {}
     return 'latest';
   }
 

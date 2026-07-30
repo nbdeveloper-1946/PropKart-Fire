@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:dio/dio.dart';
-import '../../../core/api/dio_client.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class LegalService {
   Future<Map<String, dynamic>> checkUserAcceptance(String userId) async {
@@ -18,9 +17,16 @@ class LegalService {
     } catch (_) {}
 
     try {
-      final response = await DioClient.dio.get('/legal/acceptance/$userId');
-      if (response.statusCode == 200 && response.data != null) {
-        return response.data['data'] as Map<String, dynamic>;
+      final doc = await FirebaseFirestore.instance.collection('legal_acceptance').doc(userId).get();
+      if (doc.exists) {
+        final data = doc.data()!;
+        return {
+          'accepted': true,
+          'latest_terms_version': 1,
+          'latest_privacy_version': 1,
+          'accepted_terms_version': data['terms_version'] ?? 1,
+          'accepted_privacy_version': data['privacy_version'] ?? 1,
+        };
       }
     } catch (e) {
       // Offline/Timeout Fallback: Return assumed true to prevent blocking if offline
@@ -57,20 +63,18 @@ class LegalService {
         if (Platform.isMacOS) platform = "MacOS";
       }
 
-      final response = await DioClient.dio.post(
-        '/legal/acceptance',
-        data: {
-          'user_id': userId,
-          'accepted_terms': acceptedTerms,
-          'accepted_privacy': acceptedPrivacy,
-          'terms_version': termsVersion,
-          'privacy_version': privacyVersion,
-          'platform': platform,
-          'app_version': appVersion,
-        },
-      );
+      await FirebaseFirestore.instance.collection('legal_acceptance').doc(userId).set({
+        'user_id': userId,
+        'accepted_terms': acceptedTerms,
+        'accepted_privacy': acceptedPrivacy,
+        'terms_version': termsVersion,
+        'privacy_version': privacyVersion,
+        'platform': platform,
+        'app_version': appVersion,
+        'created_at': DateTime.now().toIso8601String(),
+      });
 
-      return response.statusCode == 200;
+      return true;
     } catch (e) {
       return false;
     }

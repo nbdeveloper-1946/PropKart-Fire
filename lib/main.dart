@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'features/auth/bloc/auth_bloc.dart';
 import 'features/auth/repository/auth_repository.dart';
 import 'features/dashboard/repository/dashboard_repository.dart';
@@ -21,6 +22,7 @@ import 'core/theme/theme_manager.dart';
 import 'core/storage/isar_service.dart';
 import 'core/storage/performance_logger.dart';
 import 'core/network/sync_manager.dart';
+import 'package:flutter/foundation.dart';
 import 'core/storage/repository_coordinator.dart';
 
 // ignore: depend_on_referenced_packages
@@ -31,6 +33,19 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
+    if (kIsWeb) {
+      await Firebase.initializeApp(
+        options: const FirebaseOptions(
+          apiKey: 'AIzaSyCVT8aj2vBW9aQnAzVW0FWe_sHRgKZmu9Q',
+          appId: '1:568507233535:web:35d456dfe26a7d94bc88ca',
+          messagingSenderId: '568507233535',
+          projectId: 'propkart-c2bb5',
+          storageBucket: 'propkart-c2bb5.firebasestorage.app',
+        ),
+      );
+    } else {
+      await Firebase.initializeApp();
+    }
     await IsarService().initialize();
     await PerformanceLogger().initialize();
     // Do NOT connect Supabase Realtime before login — auth gates sync.

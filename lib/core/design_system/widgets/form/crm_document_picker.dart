@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:propkart/core/api/dio_client.dart';
 import '../../tokens/app_colors.dart';
 import '../../tokens/app_spacing.dart';
@@ -57,7 +57,8 @@ class _CRMDocumentPickerState extends State<CRMDocumentPicker> {
     });
 
     try {
-      MultipartFile multipartFile;
+      final String filename = 'properties/documents/${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+      final fileRef = FirebaseStorage.instance.ref().child(filename);
 
       if (kIsWeb) {
         if (file.bytes == null) {
@@ -66,29 +67,17 @@ class _CRMDocumentPickerState extends State<CRMDocumentPicker> {
         if (file.size > 10 * 1024 * 1024) {
           throw Exception("Document size exceeds the 10 MB limit.");
         }
-        multipartFile = MultipartFile.fromBytes(
-          file.bytes!,
-          filename: file.name,
-        );
+        await fileRef.putData(file.bytes!);
       } else {
         final File uploadFile = File(file.path!);
         final int size = await uploadFile.length();
         if (size > 10 * 1024 * 1024) {
           throw Exception("Document size exceeds the 10 MB limit.");
         }
-        multipartFile = await MultipartFile.fromFile(uploadFile.path, filename: file.name);
+        await fileRef.putFile(uploadFile);
       }
 
-      final formData = FormData.fromMap({
-        'file': multipartFile,
-      });
-
-      final response = await DioClient.dio.post(
-        widget.uploadEndpoint,
-        data: formData,
-      );
-
-      final publicUrl = response.data['data']['url'];
+      final publicUrl = await fileRef.getDownloadURL();
 
       setState(() {
         _isUploading = false;

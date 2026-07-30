@@ -1,16 +1,23 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "if [ -d \"flutter\" ]; then cd flutter && git pull && cd ..; else git clone --depth 1 -b stable https://github.com/flutter/flutter.git; fi && flutter/bin/flutter config --enable-web",
-  "buildCommand": "flutter/bin/flutter build web --release",
-  "outputDirectory": "build/web",
-  "rewrites": [
+  "version": 2,
+  "cleanUrls": true,
+  "builds": [
     {
-      "source": "/api/:path*",
-      "destination": "https://prop-kart-backend.vercel.app/api/:path*"
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build/web"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/assets/(.*)",
+      "dest": "/assets/$1"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }

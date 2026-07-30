@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:propkart/core/utils/logger.dart';
 import 'isar_collections.dart';
 import 'local_repositories.dart';
 
@@ -25,7 +26,7 @@ class IsarService {
     if (_isar != null) return;
 
     if (kIsWeb) {
-      print("🌐 [ISAR WEB] Bypassing Isar.open. Running local repositories in-memory.");
+      BeautifulLogger.info("Bypassing Isar.open. Running local repositories in-memory.");
       await LookupLocalRepository().loadInMemoryCache();
       await PropertyLocalRepository().loadInMemoryCache();
       await RequirementLocalRepository().loadInMemoryCache();
@@ -85,11 +86,11 @@ class IsarService {
     }
 
     if (toUpdate.isNotEmpty) {
-      print("🔄 [ISAR MIGRATION] Migrating ${toUpdate.length} requirements with listing type columns...");
+      BeautifulLogger.sync("Migrating ${toUpdate.length} requirements with listing type columns...");
       await _isar!.writeTxn(() async {
         await _isar!.requirementLocals.putAll(toUpdate);
       });
-      print("✅ [ISAR MIGRATION] Requirements migration complete.");
+      BeautifulLogger.success("Requirements migration complete.");
     }
   }
 

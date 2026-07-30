@@ -5,6 +5,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http_parser/http_parser.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:propkart/core/api/dio_client.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../tokens/app_colors.dart';
@@ -82,18 +83,15 @@ class _CRMImagePickerState extends State<CRMImagePicker> {
     });
 
     try {
-      MultipartFile multipartFile;
+      final String filename = 'properties/${DateTime.now().millisecondsSinceEpoch}_${pickedFile.name}';
+      final fileRef = FirebaseStorage.instance.ref().child(filename);
 
       if (kIsWeb) {
         final bytes = await pickedFile.readAsBytes();
         if (bytes.length > 5 * 1024 * 1024) {
           throw Exception("Image size exceeds the 5 MB file limit.");
         }
-        multipartFile = MultipartFile.fromBytes(
-          bytes,
-          filename: pickedFile.name,
-          contentType: MediaType('image', 'jpeg'),
-        );
+        await fileRef.putData(bytes);
       } else {
         final File file = File(pickedFile.path);
         final String targetPath = "${Directory.systemTemp.path}/compressed_img_${DateTime.now().millisecondsSinceEpoch}.jpg";
@@ -116,23 +114,10 @@ class _CRMImagePickerState extends State<CRMImagePicker> {
           throw Exception("Compressed image exceeds the 5 MB file limit.");
         }
 
-        multipartFile = await MultipartFile.fromFile(
-          uploadFile.path, 
-          filename: 'upload_image.jpg',
-          contentType: MediaType('image', 'jpeg'),
-        );
+        await fileRef.putFile(uploadFile);
       }
 
-      final formData = FormData.fromMap({
-        'file': multipartFile,
-      });
-
-      final response = await DioClient.dio.post(
-        widget.uploadEndpoint,
-        data: formData,
-      );
-      
-      final publicUrl = response.data['data']['url'];
+      final publicUrl = await fileRef.getDownloadURL();
 
       setState(() {
         if (index < widget.imageUrls.length) {
@@ -203,18 +188,15 @@ class _CRMImagePickerState extends State<CRMImagePicker> {
 
     try {
       for (final pickedFile in filesToUpload) {
-        MultipartFile multipartFile;
+        final String filename = 'properties/${DateTime.now().millisecondsSinceEpoch}_${pickedFile.name}';
+        final fileRef = FirebaseStorage.instance.ref().child(filename);
 
         if (kIsWeb) {
           final bytes = await pickedFile.readAsBytes();
           if (bytes.length > 5 * 1024 * 1024) {
             throw Exception("Image size exceeds the 5 MB file limit.");
           }
-          multipartFile = MultipartFile.fromBytes(
-            bytes,
-            filename: pickedFile.name,
-            contentType: MediaType('image', 'jpeg'),
-          );
+          await fileRef.putData(bytes);
         } else {
           final File file = File(pickedFile.path);
           final String targetPath = "${Directory.systemTemp.path}/compressed_img_${DateTime.now().millisecondsSinceEpoch}.jpg";
@@ -237,23 +219,10 @@ class _CRMImagePickerState extends State<CRMImagePicker> {
             throw Exception("Compressed image exceeds the 5 MB file limit.");
           }
 
-          multipartFile = await MultipartFile.fromFile(
-            uploadFile.path, 
-            filename: 'upload_image.jpg',
-            contentType: MediaType('image', 'jpeg'),
-          );
+          await fileRef.putFile(uploadFile);
         }
 
-        final formData = FormData.fromMap({
-          'file': multipartFile,
-        });
-
-        final response = await DioClient.dio.post(
-          widget.uploadEndpoint,
-          data: formData,
-        );
-        
-        final publicUrl = response.data['data']['url'];
+        final publicUrl = await fileRef.getDownloadURL();
         
         if (mounted) {
           widget.onImageAdded(publicUrl);
