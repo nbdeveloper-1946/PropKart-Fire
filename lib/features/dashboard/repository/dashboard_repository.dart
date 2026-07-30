@@ -226,8 +226,8 @@ class DashboardRepository {
       );
 
       _coordinator.refreshDashboard();
-    }).catchError((e, s) {
-      BeautifulLogger.error("Error during background dashboard refresh", e, s);
+    }).catchError((e) {
+      BeautifulLogger.error("Error during background dashboard refresh", e);
     });
   }
 }
