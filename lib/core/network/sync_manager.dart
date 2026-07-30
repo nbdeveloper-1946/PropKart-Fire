@@ -42,10 +42,7 @@ class SyncManager {
 
   final RepositoryCoordinator _coordinator = RepositoryCoordinator();
 
-  WebSocketChannel? _channel;
-  StreamSubscription? _channelSubscription;
-  Timer? _heartbeatTimer;
-  Timer? _reconnectTimer;
+  final List<StreamSubscription> _firestoreSubscriptions = [];
 
   SyncState _state = SyncState.disconnected;
   SyncState get state => _state;
@@ -115,319 +112,130 @@ class SyncManager {
 
   Future<void> connect() async {
     if (_state == SyncState.connected || _state == SyncState.connecting) return;
-
-    _updateState(_state == SyncState.disconnected ? SyncState.connecting : SyncState.reconnecting);
-
-    final rawWsUrl = ApiConstants.supabaseUrl.replaceFirst('https', 'wss');
-    final wsUrl = "$rawWsUrl/realtime/v1/websocket?apikey=${ApiConstants.supabaseAnonKey}&vsn=1.0.0";
+    _updateState(SyncState.connecting);
 
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-
-      _channelSubscription = _channel!.stream.listen(
-        (message) {
-          _handleIncomingMessage(message);
-        },
-        onError: (err) {
-          _handleDisconnect("Socket Error: $err");
-        },
-        onDone: () {
-          _handleDisconnect("Socket Closed");
-        },
-      );
-
-      _joinReplicationChannel();
-      _startHeartbeat();
-
-      // Enforce Offline sequence: Reconnect ➔ Delta Sync ➔ Resolve Conflicts ➔ Replay Outbox ➔ Live Realtime
+      // 1. Initial delta sync
       await triggerDeltaSync();
+      
+      // 2. Set up Firestore Snapshot Listeners
+      await _initFirestoreListeners();
 
       _updateState(SyncState.connected);
       _reconnectAttempts = 0;
       PerformanceLogger().logMetric(
-        operation: 'SyncManager: Realtime connected successfully',
+        operation: 'SyncManager: Firestore connected successfully',
         totalMs: 0,
       );
     } catch (e) {
-      _handleDisconnect("Connection failure: $e");
+      _updateState(SyncState.disconnected);
+      BeautifulLogger.error("Failed to connect Firestore listeners", e);
     }
   }
 
-  void _joinReplicationChannel() {
-    // Scoped tables only — never subscribe to entire public schema.
-    const watchedTables = <String>[
-      'properties',
-      'requirements',
-      'notifications',
-      'followups',
-      'site_visits',
-    ];
-    _sendJson({
-      "topic": "realtime:propkart",
-      "event": "phx_join",
-      "payload": {
-        "config": {
-          "postgres_changes": watchedTables
-              .map((table) => {
-                    "event": "*",
-                    "schema": "public",
-                    "table": table,
-                  })
-              .toList(),
-        }
-      },
-      "ref": (++_ref).toString()
-    });
-  }
-
-  void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (_state == SyncState.connected) {
-        _sendJson({
-          "topic": "phoenix",
-          "event": "heartbeat",
-          "payload": {},
-          "ref": (++_ref).toString()
-        });
-      }
-    });
-  }
-
-  void _sendJson(Map<String, dynamic> data) {
-    if (_channel != null) {
-      try {
-        _channel!.sink.add(jsonEncode(data));
-      } catch (_) {}
+  Future<void> _initFirestoreListeners() async {
+    // Clear old subscriptions first
+    for (final s in _firestoreSubscriptions) {
+      await s.cancel();
     }
-  }
+    _firestoreSubscriptions.clear();
 
-  void _handleIncomingMessage(dynamic rawMessage) {
-    try {
-      final data = jsonDecode(rawMessage as String);
-      final event = data['event'];
-      final topic = data['topic'];
-
-      if (event == "postgres_changes" && topic == "realtime:public") {
-        final payload = data['payload'] as Map<String, dynamic>? ?? {};
-        final table = payload['table'] as String?;
-        final record = payload['record'] as Map<String, dynamic>?;
-        final oldRecord = payload['old_record'] as Map<String, dynamic>?;
-        final eventType = payload['type'] as String?;
-
-        if (table != null && eventType != null) {
-          _incomingBuffer.add({
-            'table': table,
-            'type': eventType,
-            'record': record,
-            'old_record': oldRecord,
+    // 1. Listen to properties
+    _firestoreSubscriptions.add(
+      FirebaseFirestore.instance.collection("properties").where("deleted_at", isNull: true).snapshots().listen((snapshot) async {
+        final List<PropertyLocal> pList = snapshot.docs.map((doc) => PropertyModel.fromJson({...doc.data(), 'id': doc.id}).toLocal()).toList();
+        if (kIsWeb) {
+          PropertyLocalRepository.inMemory.clear();
+          for (final p in pList) PropertyLocalRepository.inMemory[p.id] = p;
+        } else {
+          final isar = IsarService().isar;
+          await isar.writeTxn(() async {
+            await isar.propertyLocals.clear();
+            await isar.propertyLocals.putAll(pList);
           });
-
-          _batchTimer ??= Timer(const Duration(milliseconds: 100), _processBatch);
         }
-      }
-    } catch (e) {
-      BeautifulLogger.error("Error parsing raw socket stream", e);
-    }
-  }
-
-  Future<void> _processBatch() async {
-    _batchTimer = null;
-    if (_incomingBuffer.isEmpty) return;
-
-    final batch = List<Map<String, dynamic>>.from(_incomingBuffer);
-    _incomingBuffer.clear();
-
-    final start = DateTime.now();
-    final tablesToRefresh = <String>{};
-
-    final propertiesToPut = <PropertyLocal>[];
-    final propertiesToDelete = <String>[];
-
-    final requirementsToPut = <RequirementLocal>[];
-    final requirementsToDelete = <String>[];
-
-    final followupsToPut = <FollowupLocal>[];
-    final followupsToDelete = <String>[];
-
-    final buildersToPut = <BuilderLocal>[];
-    final buildersToDelete = <String>[];
-
-    final ownersToPut = <OwnerLocal>[];
-    final ownersToDelete = <String>[];
-
-    final apiClient = ApiClient();
-
-    for (final item in batch) {
-      final table = item['table'] as String;
-      final type = item['type'] as String;
-      final record = item['record'] as Map<String, dynamic>?;
-      final oldRecord = item['old_record'] as Map<String, dynamic>?;
-
-      tablesToRefresh.add(table);
-
-      if (type == "DELETE" && oldRecord != null) {
-        final id = oldRecord['id'] as String?;
-        if (id != null) {
-          if (table == "properties") propertiesToDelete.add(id);
-          else if (table == "requirements") requirementsToDelete.add(id);
-          else if (table == "followups") followupsToDelete.add(id);
-          else if (table == "builders") buildersToDelete.add(id);
-          else if (table == "owners") ownersToDelete.add(id);
-        }
-      } else if (record != null) {
-        if (table == "properties") {
-          try {
-            final id = record['id'] as String;
-            final response = await apiClient.get('/properties/$id');
-            if (response.statusCode == 200 && response.data != null) {
-              final data = response.data['data']?['property'];
-              if (data != null) {
-                propertiesToPut.add(PropertyModel.fromJson(data).toLocal());
-              } else {
-                throw Exception("Property data not found in response");
-              }
-            } else {
-              throw Exception("Failed to fetch property details: Status ${response.statusCode}");
-            }
-          } catch (e) {
-            BeautifulLogger.warning("Failed to fetch property details for $record, falling back to raw record: $e");
-            final enriched = await _enrichRawRecord("properties", record);
-            propertiesToPut.add(PropertyModel.fromJson(enriched).toLocal());
-          }
-        } else if (table == "requirements") {
-          try {
-            final id = record['id'] as String;
-            final response = await apiClient.get('/requirements/$id');
-            if (response.statusCode == 200 && response.data != null) {
-              final data = response.data['data']?['requirement'];
-              if (data != null) {
-                requirementsToPut.add(RequirementModel.fromJson(data).toLocal());
-              } else {
-                throw Exception("Requirement data not found in response");
-              }
-            } else {
-              throw Exception("Failed to fetch requirement details: Status ${response.statusCode}");
-            }
-          } catch (e) {
-            BeautifulLogger.warning("Failed to fetch requirement details for $record, falling back to raw record: $e");
-            final enriched = await _enrichRawRecord("requirements", record);
-            requirementsToPut.add(RequirementModel.fromJson(enriched).toLocal());
-          }
-        } else if (table == "followups") {
-          followupsToPut.add(DashboardFollowup.fromJson(record).toLocal('System'));
-        } else if (table == "builders") {
-          buildersToPut.add(BuilderModel.fromJson(record).toLocal());
-        } else if (table == "owners") {
-          ownersToPut.add(OwnerModel.fromJson(record).toLocal());
-        }
-      }
-    }
-
-    final writeStart = DateTime.now();
-
-    if (kIsWeb) {
-      for (final p in propertiesToPut) PropertyLocalRepository.inMemory[p.id] = p;
-      for (final id in propertiesToDelete) PropertyLocalRepository.inMemory.remove(id);
-
-      for (final r in requirementsToPut) RequirementLocalRepository.inMemory[r.id] = r;
-      for (final id in requirementsToDelete) RequirementLocalRepository.inMemory.remove(id);
-
-      for (final f in followupsToPut) FollowupLocalRepository.inMemory[f.id] = f;
-      for (final id in followupsToDelete) FollowupLocalRepository.inMemory.remove(id);
-
-      for (final b in buildersToPut) BuilderLocalRepository.inMemory[b.id] = b;
-      for (final id in buildersToDelete) BuilderLocalRepository.inMemory.remove(id);
-
-      for (final o in ownersToPut) OwnerLocalRepository.inMemory[o.id] = o;
-      for (final id in ownersToDelete) OwnerLocalRepository.inMemory.remove(id);
-    } else {
-      final isar = IsarService().isar;
-      try {
-        await isar.writeTxn(() async {
-          if (propertiesToPut.isNotEmpty) await isar.propertyLocals.putAll(propertiesToPut);
-          for (final id in propertiesToDelete) {
-            await isar.propertyLocals.filter().idEqualTo(id).deleteAll();
-          }
-
-          if (requirementsToPut.isNotEmpty) await isar.requirementLocals.putAll(requirementsToPut);
-          for (final id in requirementsToDelete) {
-            await isar.requirementLocals.filter().idEqualTo(id).deleteAll();
-          }
-
-          if (followupsToPut.isNotEmpty) await isar.followupLocals.putAll(followupsToPut);
-          for (final id in followupsToDelete) {
-            await isar.followupLocals.filter().idEqualTo(id).deleteAll();
-          }
-
-          if (buildersToPut.isNotEmpty) await isar.builderLocals.putAll(buildersToPut);
-          for (final id in buildersToDelete) {
-            await isar.builderLocals.filter().idEqualTo(id).deleteAll();
-          }
-
-          if (ownersToPut.isNotEmpty) await isar.ownerLocals.putAll(ownersToPut);
-          for (final id in ownersToDelete) {
-            await isar.ownerLocals.filter().idEqualTo(id).deleteAll();
-          }
-        });
-      } catch (e) {
-        BeautifulLogger.error("Batch write transaction failed", e);
-      }
-    }
-
-    final isarWriteMs = DateTime.now().difference(writeStart).inMilliseconds;
-
-    final notifyStart = DateTime.now();
-    for (final table in tablesToRefresh) {
-      if (table == "properties") _coordinator.refreshProperties();
-      else if (table == "requirements") _coordinator.refreshRequirements();
-      else if (table == "followups") _coordinator.refreshDashboard();
-      else if (table == "builders") _coordinator.refreshBuilders();
-      else if (table == "owners") _coordinator.refreshOwners();
-    }
-    final totalMs = DateTime.now().difference(start).inMilliseconds;
-
-    PerformanceLogger().logMetric(
-      operation: 'Realtime Event | Tables: ${tablesToRefresh.join(", ")}',
-      isarWriteMs: isarWriteMs,
-      totalMs: totalMs,
-    );
-  }
-
-  void _handleDisconnect(String reason) {
-    BeautifulLogger.warning("Disconnected. Reason: $reason");
-    _heartbeatTimer?.cancel();
-    _channelSubscription?.cancel();
-    try {
-      _channel?.sink.close();
-    } catch (_) {}
-
-    _updateState(SyncState.disconnected);
-    PerformanceLogger().logMetric(
-      operation: 'SyncManager: Realtime disconnected | $reason',
-      totalMs: 0,
+        _coordinator.refreshProperties();
+      })
     );
 
-    _reconnectAttempts++;
-    final backoffSeconds = (_reconnectAttempts * 2).clamp(2, 30);
-    BeautifulLogger.sync("Retrying in $backoffSeconds seconds... (Attempt $_reconnectAttempts)");
+    // 2. Listen to requirements
+    _firestoreSubscriptions.add(
+      FirebaseFirestore.instance.collection("requirements").where("deleted_at", isNull: true).snapshots().listen((snapshot) async {
+        final List<RequirementLocal> rList = snapshot.docs.map((doc) => RequirementModel.fromJson({...doc.data(), 'id': doc.id}).toLocal()).toList();
+        if (kIsWeb) {
+          RequirementLocalRepository.inMemory.clear();
+          for (final r in rList) RequirementLocalRepository.inMemory[r.id] = r;
+        } else {
+          final isar = IsarService().isar;
+          await isar.writeTxn(() async {
+            await isar.requirementLocals.clear();
+            await isar.requirementLocals.putAll(rList);
+          });
+        }
+        _coordinator.refreshRequirements();
+      })
+    );
 
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(Duration(seconds: backoffSeconds), () {
-      connect();
-    });
+    // 3. Listen to builders
+    _firestoreSubscriptions.add(
+      FirebaseFirestore.instance.collection("builders").snapshots().listen((snapshot) async {
+        final List<BuilderLocal> bList = snapshot.docs.map((doc) => BuilderModel.fromJson({...doc.data(), 'id': doc.id}).toLocal()).toList();
+        if (kIsWeb) {
+          BuilderLocalRepository.inMemory.clear();
+          for (final b in bList) BuilderLocalRepository.inMemory[b.id] = b;
+        } else {
+          final isar = IsarService().isar;
+          await isar.writeTxn(() async {
+            await isar.builderLocals.clear();
+            await isar.builderLocals.putAll(bList);
+          });
+        }
+        _coordinator.refreshBuilders();
+      })
+    );
+
+    // 4. Listen to owners
+    _firestoreSubscriptions.add(
+      FirebaseFirestore.instance.collection("owners").snapshots().listen((snapshot) async {
+        final List<OwnerLocal> oList = snapshot.docs.map((doc) => OwnerModel.fromJson({...doc.data(), 'id': doc.id}).toLocal()).toList();
+        if (kIsWeb) {
+          OwnerLocalRepository.inMemory.clear();
+          for (final o in oList) OwnerLocalRepository.inMemory[o.id] = o;
+        } else {
+          final isar = IsarService().isar;
+          await isar.writeTxn(() async {
+            await isar.ownerLocals.clear();
+            await isar.ownerLocals.putAll(oList);
+          });
+        }
+        _coordinator.refreshOwners();
+      })
+    );
+
+    // 5. Listen to followups
+    _firestoreSubscriptions.add(
+      FirebaseFirestore.instance.collection("followups").where("deleted_at", isNull: true).snapshots().listen((snapshot) async {
+        final List<FollowupLocal> fList = snapshot.docs.map((doc) => DashboardFollowup.fromJson({...doc.data(), 'id': doc.id}).toLocal('System')).toList();
+        if (kIsWeb) {
+          FollowupLocalRepository.inMemory.clear();
+          for (final f in fList) FollowupLocalRepository.inMemory[f.id] = f;
+        } else {
+          final isar = IsarService().isar;
+          await isar.writeTxn(() async {
+            await isar.followupLocals.clear();
+            await isar.followupLocals.putAll(fList);
+          });
+        }
+        _coordinator.refreshDashboard();
+      })
+    );
   }
 
   Future<void> disconnect() async {
-    _reconnectTimer?.cancel();
-    _heartbeatTimer?.cancel();
-    _batchTimer?.cancel();
-    _channelSubscription?.cancel();
-    try {
-      await _channel?.sink.close();
-    } catch (_) {}
-    _channel = null;
-    _incomingBuffer.clear();
+    for (final s in _firestoreSubscriptions) {
+      await s.cancel();
+    }
+    _firestoreSubscriptions.clear();
     isSyncCompleted = false;
     isSyncing.value = false;
     _updateState(SyncState.disconnected);

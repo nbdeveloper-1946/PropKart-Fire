@@ -13,7 +13,7 @@ class DashboardRepository {
 
 
 
-  Future<DashboardData> getDashboardData() async {
+  Future<DashboardData> getDashboardData({bool forceRefresh = false}) async {
     final start = DateTime.now();
     
     // Read from local Isar
@@ -35,9 +35,6 @@ class DashboardRepository {
       jsonParseMs: jsonParseMs,
       totalMs: totalMs,
     );
-
-    // Trigger async background refresh
-    _triggerBackgroundDashboardRefresh();
 
     // Get the dynamic counts of requirements to ensure they are always correct and in sync
     var localReqs = await _coordinator.requirementLocal.getRequirements();
@@ -102,7 +99,7 @@ class DashboardRepository {
       return false;
     }
 
-    if (cachedData != null) {
+    if (cachedData != null && !forceRefresh) {
       final updatedSummary = DashboardSummary(
         totalProperties: cachedData.summary.totalProperties,
         available: cachedData.summary.available,
@@ -137,8 +134,7 @@ class DashboardRepository {
         isAllowedItem(sv.requirementId, sv.requirementCustomerName)
       ).toList();
 
-      return DashboardData(
-        summary: updatedSummary,
+      return DashboardData(   summary: updatedSummary,
         activity: cachedData.activity,
         recentProperties: cachedData.recentProperties,
         checklist: cachedData.checklist,
